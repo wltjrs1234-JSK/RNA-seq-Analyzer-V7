@@ -1002,8 +1002,13 @@ function generateIntegratedAutoPathway(mapName, reactionText, direction = "TB", 
                 finalArrows.push(JSON.parse(JSON.stringify(ta)));
             });
             
+            (presetObj.dockingArrows || []).forEach(da => {
+                finalArrows.push(JSON.parse(JSON.stringify(da)));
+            });
+            
             let gIdx = 0;
-            (presetObj.targetGenes || []).forEach(tg => {
+            const presetGeneSource = presetObj.targetGenes || presetObj.customGenes || [];
+            presetGeneSource.forEach(tg => {
                 const cleanSym = tg.symbol.toUpperCase();
                 let repLog2fc = 0.0;
                 let geneIsoforms = [];
@@ -1016,7 +1021,7 @@ function generateIntegratedAutoPathway(mapName, reactionText, direction = "TB", 
                 }
                 
                 customGeneList.push({
-                    id: `gene_${Date.now()}_${gIdx++}`,
+                    id: tg.id || `gene_${Date.now()}_${gIdx++}`,
                     symbol: cleanSym,
                     x: tg.x,
                     y: tg.y,
@@ -7068,8 +7073,24 @@ function addTargetGene(symbol, strategy, note = "") {
     const cleanSymbol = symbol.trim().toUpperCase();
     const strat = (strategy || currentTargetStrategy || "OE").toUpperCase();
     
+    if (!pathwayMapsStore || !pathwayMapsStore[currentMapId]) {
+        const savedStore = localStorage.getItem("pathway_maps_store");
+        if (savedStore) {
+            try { pathwayMapsStore = JSON.parse(savedStore); } catch (e) {}
+        }
+        if (!pathwayMapsStore) pathwayMapsStore = {};
+        if (!pathwayMapsStore[currentMapId]) {
+            pathwayMapsStore[currentMapId] = {
+                name: "Yeast GSH Pathway (S. cerevisiae)",
+                species: gCurrentSpecies || "sce",
+                width: 1880,
+                height: 1150,
+                nodes: [],
+                arrows: []
+            };
+        }
+    }
     const currentMap = pathwayMapsStore[currentMapId];
-    if (!currentMap) return;
     
     let targets = getGshTargetGenes(currentMapId);
     
@@ -8749,8 +8770,11 @@ function renderGSHPathwayOverlay(results) {
     }
 
     // 2. Add Custom Genes (Supports duplicates & key tracking)
-    customGenes.forEach(cg => {
-        const uniqueId = cg.id || `gene_legacy_${cg.symbol}_${Math.random()}`; // Handle old local storage models gracefully
+    customGenes.forEach((cg, idx) => {
+        if (!cg.id) {
+            cg.id = `gene_legacy_${cg.symbol}_${idx}`;
+        }
+        const uniqueId = cg.id;
         genesToRender.push({
             id: uniqueId,
             symbol: cg.symbol,
@@ -8964,8 +8988,17 @@ function renderGSHPathwayOverlay(results) {
                             let snapX = null, snapY = null, gx1 = 0, gy1 = 0, gx2 = 0, gy2 = 0;
                             genesToRender.forEach(other => {
                                 if (other.id === key) return;
-                                const obX = (other.x * mapWidth) / 100 + ((curSavedOffsets[other.id] || {}).dx || 0);
-                                const obY = (other.y * mapHeight) / 100 + ((curSavedOffsets[other.id] || {}).dy || 0);
+                                let oBaseX = (other.x * mapWidth) / 100;
+                                let oBaseY = (other.y * mapHeight) / 100;
+                                if (other.arrowId && currentMap.arrows) {
+                                    const attArr = currentMap.arrows.find(a => a.id === other.arrowId);
+                                    if (attArr && attArr._calculated) {
+                                        oBaseX = attArr._calculated.midX;
+                                        oBaseY = attArr._calculated.midY - 14;
+                                    }
+                                }
+                                const obX = oBaseX + ((curSavedOffsets[other.id] || {}).dx || 0);
+                                const obY = oBaseY + ((curSavedOffsets[other.id] || {}).dy || 0);
                                 if (Math.abs(candX - obX) < bestDx) {
                                     bestDx = Math.abs(candX - obX);
                                     snapX = obX;
@@ -9011,8 +9044,15 @@ function renderGSHPathwayOverlay(results) {
                             if (foTarget) {
                                 const gItem = customGenes.find(cg => (cg.id === gKey) || (!cg.id && cg.symbol === gKey)) || (window.lastGSHResults ? window.lastGSHResults[gKey] : null);
                                 if (gItem) {
-                                    const bX = (gItem.x * mapWidth) / 100;
-                                    const bY = (gItem.y * mapHeight) / 100;
+                                    let bX = (gItem.x * mapWidth) / 100;
+                                    let bY = (gItem.y * mapHeight) / 100;
+                                    if (gItem.arrowId && currentMap.arrows) {
+                                        const attArr = currentMap.arrows.find(a => a.id === gItem.arrowId);
+                                        if (attArr && attArr._calculated) {
+                                            bX = attArr._calculated.midX;
+                                            bY = attArr._calculated.midY - 14;
+                                        }
+                                    }
                                     foTarget.setAttribute("x", (bX + curSavedOffsets[gKey].dx - 60).toFixed(1));
                                     foTarget.setAttribute("y", (bY + curSavedOffsets[gKey].dy - 14).toFixed(1));
                                 }
@@ -9646,19 +9686,30 @@ function initGSHZoomPan() {
                 }
                 
                 // Add Custom Genes
-                customGenes.forEach(cg => {
-                    const uniqueId = cg.id || `gene_legacy_${cg.symbol}_${Math.random()}`;
+                customGenes.forEach((cg, idx) => {
+                    if (!cg.id) {
+                        cg.id = `gene_legacy_${cg.symbol}_${idx}`;
+                    }
+                    const uniqueId = cg.id;
                     genesToRender.push({
                         id: uniqueId,
                         x: cg.x,
-                        y: cg.y
+                        y: cg.y,
+                        arrowId: cg.arrowId || null
                     });
                 });
                 
                 // Check each gene's bounding area fallback
                 genesToRender.forEach(item => {
-                    const baseX = (item.x * mapWidth) / 100;
-                    const baseY = (item.y * mapHeight) / 100;
+                    let baseX = (item.x * mapWidth) / 100;
+                    let baseY = (item.y * mapHeight) / 100;
+                    if (item.arrowId && currentMap.arrows) {
+                        const attachedArrow = currentMap.arrows.find(a => a.id === item.arrowId);
+                        if (attachedArrow && attachedArrow._calculated) {
+                            baseX = attachedArrow._calculated.midX;
+                            baseY = attachedArrow._calculated.midY - 14;
+                        }
+                    }
                     const offset = savedOffsets[item.id] || { dx: 0, dy: 0 };
                     const finalX = baseX + offset.dx;
                     const finalY = baseY + offset.dy;
@@ -10131,16 +10182,15 @@ function initGSHHotkeyBindings() {
             });
             
             selectedGenes.forEach(key => {
-                const isCustom = customGenes.some(cg => cg.symbol === key);
+                const cg = customGenes.find(g => (g.id === key) || (!g.id && g.symbol === key));
                 const offset = savedOffsets[key] || { dx: 0, dy: 0 };
                 
                 let geneObj = null;
-                if (isCustom) {
-                    const cg = customGenes.find(g => g.symbol === key);
+                if (cg) {
                     geneObj = JSON.parse(JSON.stringify(cg));
                     geneObj.isCustom = true;
                 } else {
-                    const deg = window.lastGSHResults[key];
+                    const deg = window.lastGSHResults ? window.lastGSHResults[key] : null;
                     if (deg) {
                         geneObj = {
                             symbol: key,
@@ -10193,31 +10243,24 @@ function initGSHHotkeyBindings() {
             const customGenes = getGshCustomGenes(currentMapId);
             const savedOffsets = getGshGeneOffsets(currentMapId);
             
-            clipboardBuffer.genes.forEach((g) => {
-                let symbol = g.symbol;
-                let suffix = 1;
-                while (
-                    customGenes.some(cg => cg.symbol === symbol) || 
-                    (window.lastGSHResults[symbol] && !clipboardBuffer.genes.some(bg => bg.symbol === symbol && bg.isCustom === false))
-                ) {
-                    symbol = `${g.symbol}_copy${suffix}`;
-                    suffix++;
-                }
-                
+            clipboardBuffer.genes.forEach((g, idx) => {
+                const newGeneId = `gene_paste_${timestamp}_${idx}_${Math.round(Math.random() * 1000)}`;
                 customGenes.push({
-                    symbol: symbol,
+                    id: newGeneId,
+                    symbol: g.symbol,
                     x: g.x,
                     y: g.y,
+                    arrowId: g.arrowId || null,
                     rep_log2fc: g.rep_log2fc,
                     genes: g.genes
                 });
                 
-                savedOffsets[symbol] = {
-                    dx: g.dx + 40,
-                    dy: g.dy + 40
+                savedOffsets[newGeneId] = {
+                    dx: (g.dx || 0) + 40,
+                    dy: (g.dy || 0) + 40
                 };
                 
-                selectedGenes.add(symbol);
+                selectedGenes.add(newGeneId);
             });
             
             setGshCustomGenes(currentMapId, customGenes);
@@ -10550,7 +10593,8 @@ function initGSHEditorBindings() {
             btn.addEventListener("click", () => {
                 const tool = toolButtons[btnId];
                 if (tool === 'add-gene') {
-                    openGeneSearchModal();
+                    const preselectedArrow = selectedArrows.size === 1 ? Array.from(selectedArrows)[0] : null;
+                    openGeneSearchModal(preselectedArrow);
                     setGshActiveTool(null);
                 } else if (activeGshTool === tool) {
                     setGshActiveTool(null);
@@ -11156,7 +11200,7 @@ function initGeneSearchModal() {
                 li.addEventListener("click", () => {
                     const pickedSym = (g.gene_symbol || g.locus_tag).trim();
                     parts[parts.length - 1] = " " + pickedSym;
-                    input.value = parts.join(",").replace(/^[\s,]+/, "") + ", ";
+                    input.value = parts.join(",").replace(/^[\s,]+/, "");
                     suggestions.style.display = "none";
                     input.focus();
                 });
@@ -11169,8 +11213,23 @@ function initGeneSearchModal() {
         
         input.addEventListener("keydown", (e) => {
             if (e.key === "Enter") {
+                e.preventDefault();
                 if (suggestions.style.display === "block" && suggestions.firstElementChild) {
-                    suggestions.firstElementChild.click();
+                    const currentVal = input.value;
+                    const parts = currentVal.split(",");
+                    const lastPart = parts[parts.length - 1].trim().toUpperCase();
+                    const firstStrong = suggestions.firstElementChild.querySelector("strong");
+                    const firstSym = firstStrong ? firstStrong.innerText.trim().toUpperCase() : "";
+                    if (lastPart === firstSym || suggestions.children.length === 1) {
+                        if (lastPart !== firstSym && firstSym) {
+                            parts[parts.length - 1] = " " + firstSym;
+                            input.value = parts.join(",").replace(/^[\s,]+/, "");
+                        }
+                        suggestions.style.display = "none";
+                        submitGeneSearchModal();
+                    } else {
+                        suggestions.firstElementChild.click();
+                    }
                 } else {
                     submitGeneSearchModal();
                 }
@@ -11192,8 +11251,24 @@ function initGeneSearchModal() {
             return;
         }
         
+        if (!pathwayMapsStore || !pathwayMapsStore[currentMapId]) {
+            const savedStore = localStorage.getItem("pathway_maps_store");
+            if (savedStore) {
+                try { pathwayMapsStore = JSON.parse(savedStore); } catch (e) {}
+            }
+            if (!pathwayMapsStore) pathwayMapsStore = {};
+            if (!pathwayMapsStore[currentMapId]) {
+                pathwayMapsStore[currentMapId] = {
+                    name: "Yeast GSH Pathway (S. cerevisiae)",
+                    species: gCurrentSpecies || "sce",
+                    width: 1880,
+                    height: 1150,
+                    nodes: [],
+                    arrows: []
+                };
+            }
+        }
         const currentMap = pathwayMapsStore[currentMapId];
-        if (!currentMap) return;
         
         const mapWidth = currentMap.width || 1024;
         const mapHeight = currentMap.height || 580;
@@ -11206,9 +11281,14 @@ function initGeneSearchModal() {
         }
         
         const custom = getGshCustomGenes(currentMapId);
+        const savedOffsets = getGshGeneOffsets(currentMapId);
         const shouldAttachToArrow = attachCheck && attachCheck.checked && currentGeneTargetArrowId;
         
-        // Calculate base coords
+        // Calculate base coords:
+        // 1) Explicit coordinates clicked on canvas
+        // 2) Selected arrow midpoint
+        // 3) Selected node top/right vicinity
+        // 4) Current viewport center (visible screen area)
         let targetX = 50;
         let targetY = 50;
         
@@ -11221,7 +11301,31 @@ function initGeneSearchModal() {
                 targetX = (arrow._calculated.midX / mapWidth) * 100;
                 targetY = ((arrow._calculated.midY - 14) / mapHeight) * 100;
             }
+        } else if (selectedNodes && selectedNodes.size > 0) {
+            const firstNid = Array.from(selectedNodes)[0];
+            const nodesMap = getNodesMap();
+            const selNode = nodesMap[firstNid];
+            if (selNode) {
+                targetX = ((selNode.x + selNode.w / 2) / mapWidth) * 100;
+                targetY = ((selNode.y - 18) / mapHeight) * 100;
+            }
+        } else {
+            const wrapper = document.querySelector(".gsh-pathway-wrapper");
+            if (wrapper && wrapper.clientWidth > 0 && wrapper.clientHeight > 0) {
+                const centerSvgX = Math.max(80, Math.min(mapWidth - 80, (wrapper.clientWidth / 2 - gshZoomPanX) / (gshZoomScale || 1)));
+                const centerSvgY = Math.max(40, Math.min(mapHeight - 40, (wrapper.clientHeight / 2 - gshZoomPanY) / (gshZoomScale || 1)));
+                targetX = (centerSvgX / mapWidth) * 100;
+                targetY = (centerSvgY / mapHeight) * 100;
+            }
         }
+        
+        // Count existing genes attached to the same arrow so we don't stack them invisibly
+        let existingArrowGeneCount = 0;
+        if (shouldAttachToArrow) {
+            existingArrowGeneCount = custom.filter(cg => cg.arrowId === currentGeneTargetArrowId).length;
+        }
+        
+        clearSelection();
         
         rawSymbols.forEach((sym, idx) => {
             let repLog2fc = 0.0;
@@ -11235,23 +11339,35 @@ function initGeneSearchModal() {
             }
             
             const newGeneId = `gene_${Date.now()}_${Math.round(Math.random() * 1000)}_${idx}`;
+            const itemTargetY = shouldAttachToArrow ? targetY : (targetY + (idx * 20 / mapHeight) * 100);
+            
             custom.push({
                 id: newGeneId,
                 symbol: sym,
-                x: targetX,
-                y: targetY,
+                x: Number(targetX.toFixed(2)),
+                y: Number(itemTargetY.toFixed(2)),
                 arrowId: shouldAttachToArrow ? currentGeneTargetArrowId : null,
                 rep_log2fc: repLog2fc,
                 genes: geneIsoforms
             });
+            
+            if (shouldAttachToArrow && (existingArrowGeneCount + idx) > 0) {
+                savedOffsets[newGeneId] = {
+                    dx: 0,
+                    dy: (existingArrowGeneCount + idx) * 19
+                };
+            }
+            
+            selectedGenes.add(newGeneId);
         });
         
         setGshCustomGenes(currentMapId, custom);
+        setGshGeneOffsets(currentMapId, savedOffsets);
         saveAllPathwayMaps();
         pushGshHistory();
         closeGeneSearchModal();
         renderGSHPathway();
-        showGshToast(`✨ ${rawSymbols.join(", ")} 유전자 배지가 추가되었습니다.`);
+        showGshToast(`✨ ${rawSymbols.join(", ")} 유전자 배지가 추가 및 선택되었습니다. (드래그 또는 방향키로 위치 이동 가능)`);
     };
     
     if (btnSubmit) btnSubmit.addEventListener("click", submitGeneSearchModal);
@@ -11516,8 +11632,15 @@ function alignSelectedNodes(alignmentType) {
         selectedGenes.forEach(gKey => {
             const gItem = customGenes.find(cg => (cg.id === gKey) || (!cg.id && cg.symbol === gKey)) || results[gKey];
             if (gItem) {
-                const baseX = (gItem.x * mapWidth) / 100;
-                const baseY = (gItem.y * mapHeight) / 100;
+                let baseX = (gItem.x * mapWidth) / 100;
+                let baseY = (gItem.y * mapHeight) / 100;
+                if (gItem.arrowId && currentMap.arrows) {
+                    const attArr = currentMap.arrows.find(a => a.id === gItem.arrowId);
+                    if (attArr && attArr._calculated) {
+                        baseX = attArr._calculated.midX;
+                        baseY = attArr._calculated.midY - 14;
+                    }
+                }
                 const off = savedOffsets[gKey] || { dx: 0, dy: 0 };
                 selGeneItems.push({ key: gKey, baseX, baseY, absX: baseX + off.dx, absY: baseY + off.dy });
             }
@@ -11597,8 +11720,15 @@ function distributeSelectedElements(direction) {
         selectedGenes.forEach(gKey => {
             const gItem = customGenes.find(cg => (cg.id === gKey) || (!cg.id && cg.symbol === gKey)) || results[gKey];
             if (gItem) {
-                const baseX = (gItem.x * mapWidth) / 100;
-                const baseY = (gItem.y * mapHeight) / 100;
+                let baseX = (gItem.x * mapWidth) / 100;
+                let baseY = (gItem.y * mapHeight) / 100;
+                if (gItem.arrowId && currentMap.arrows) {
+                    const attArr = currentMap.arrows.find(a => a.id === gItem.arrowId);
+                    if (attArr && attArr._calculated) {
+                        baseX = attArr._calculated.midX;
+                        baseY = attArr._calculated.midY - 14;
+                    }
+                }
                 const off = savedOffsets[gKey] || { dx: 0, dy: 0 };
                 selGeneItems.push({ key: gKey, baseX, baseY, absX: baseX + off.dx, absY: baseY + off.dy });
             }
