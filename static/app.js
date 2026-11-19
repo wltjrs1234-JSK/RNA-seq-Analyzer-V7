@@ -1282,9 +1282,11 @@ function updateSpeciesTitle(species) {
         if (logoText) logoText.textContent = "YeastRNA";
     }
     
-    // Refresh sessions for newly selected species
+    // Refresh sessions for newly selected species and auto-restore active session for that species
     if (typeof loadSessions === "function") {
-        loadSessions();
+        gGenes = [];
+        window.gGenes = [];
+        loadSessions(true);
     }
     
     // Refresh KEGG pathways for newly selected species
@@ -1396,7 +1398,7 @@ function initSessions() {
     if (sessionSelect) {
         sessionSelect.addEventListener("change", (e) => {
             const sid = e.target.value;
-            if (sid && sid !== gActiveSessionId) {
+            if (sid && (sid !== gActiveSessionId || !gGenes || gGenes.length === 0)) {
                 switchSession(sid);
             }
         });
@@ -1420,11 +1422,11 @@ function initSessions() {
         });
     }
     
-    // Initial load of sessions
-    loadSessions();
+    // Initial load of sessions and auto-restore active session on page refresh
+    loadSessions(true);
 }
 
-function loadSessions() {
+function loadSessions(autoRestoreActive = false) {
     let url = `${API_URL}/api/sessions`;
     if (gCurrentSpecies) {
         url += `?species=${gCurrentSpecies}`;
@@ -1436,6 +1438,14 @@ function loadSessions() {
             gActiveSessionId = data.active_session_id || null;
             updateSessionDropdown();
             renderSessionCatalog();
+            
+            // If page was refreshed or no genes are loaded yet, automatically restore active session data
+            if (autoRestoreActive && (!gGenes || gGenes.length === 0) && gSessions.length > 0) {
+                const targetSession = gSessions.find(s => s.id === gActiveSessionId) || gSessions[0];
+                if (targetSession && targetSession.id) {
+                    switchSession(targetSession.id);
+                }
+            }
         })
         .catch(err => {
             console.error("Failed to load sessions:", err);
@@ -1509,7 +1519,7 @@ function renderSessionCatalog() {
                 </div>
             </div>
             <div class="session-card-actions">
-                ${!isActive ? `<button class="btn btn-primary btn-sm btn-switch-session" data-id="${s.id}" style="padding: 4px 10px; font-size: 12px;"><i class="fa-solid fa-right-to-bracket"></i> 전환</button>` : ''}
+                ${(!isActive || !gGenes || gGenes.length === 0) ? `<button class="btn btn-primary btn-sm btn-switch-session" data-id="${s.id}" style="padding: 4px 10px; font-size: 12px;"><i class="fa-solid fa-right-to-bracket"></i> ${isActive ? '불러오기' : '전환'}</button>` : ''}
                 <button class="btn btn-secondary btn-sm btn-rename-session" data-id="${s.id}" data-name="${escapeHtml(s.name)}" style="padding: 4px 10px; font-size: 12px;"><i class="fa-solid fa-pen"></i> 수정</button>
                 <button class="btn btn-secondary btn-sm btn-delete-session" data-id="${s.id}" style="padding: 4px 10px; font-size: 12px; color: #ef4444;"><i class="fa-solid fa-trash"></i> 삭제</button>
             </div>
